@@ -7,6 +7,69 @@ import { Home } from './pages/home'
 import type { Routes } from '#common/types'
 import type { HTTPException } from 'hono/http-exception'
 
+// JioSaavn の不揃いなデータ構造を安全な値に補正する関数
+function sanitizeItem(item: any): any {
+  if (!item || typeof item !== 'object') return {}
+
+  // JioSaavn が image: false などで返してくる場合にアプリが .replace() で落ちるのを防ぐ
+  if (typeof item.image !== 'string') item.image = ''
+  if (typeof item.title !== 'string') item.title = item.song || item.name || ''
+  if (typeof item.song !== 'string') item.song = item.title || ''
+  if (typeof item.subtitle !== 'string') item.subtitle = ''
+  if (typeof item.type !== 'string') item.type = 'song'
+  if (typeof item.perma_url !== 'string') item.perma_url = ''
+
+  if (!item.more_info || typeof item.more_info !== 'object') {
+    item.more_info = {}
+  }
+
+  const m = item.more_info
+  if (typeof m.singers !== 'string') m.singers = ''
+  if (typeof m.music !== 'string') m.music = ''
+  if (typeof m.album !== 'string') m.album = ''
+  if (typeof m.primary_artists !== 'string') m.primary_artists = ''
+  if (typeof m.encrypted_media_url !== 'string') m.encrypted_media_url = ''
+
+  if (!m.artistMap || typeof m.artistMap !== 'object') {
+    m.artistMap = { primary_artists: [], featured_artists: [], artists: [] }
+  } else {
+    if (!Array.isArray(m.artistMap.primary_artists)) m.artistMap.primary_artists = []
+    if (!Array.isArray(m.artistMap.featured_artists)) m.artistMap.featured_artists = []
+    if (!Array.isArray(m.artistMap.artists)) m.artistMap.artists = []
+  }
+
+  return item
+}
+
+function sanitizeJioSaavnData(data: any): any {
+  if (!data || typeof data !== 'object') {
+    data = {}
+  }
+
+  if (Array.isArray(data)) {
+    return data.map(sanitizeItem)
+  }
+
+  if (!Array.isArray(data.results)) {
+    data.results = []
+  } else {
+    data.results = data.results.map(sanitizeItem)
+  }
+
+  const categories = ['songs', 'albums', 'artists', 'playlists', 'topquery', 'shows']
+  for (const cat of categories) {
+    if (!data[cat] || typeof data[cat] !== 'object') {
+      data[cat] = { data: [] }
+    } else if (!Array.isArray(data[cat].data)) {
+      data[cat].data = []
+    } else {
+      data[cat].data = data[cat].data.map(sanitizeItem)
+    }
+  }
+
+  return data
+}
+
 export class App {
   private app: OpenAPIHono
 
@@ -53,18 +116,9 @@ export class App {
           data = {}
         }
 
-        // JioSaavn に楽曲が無い場合、アプリ側で undefined エラーが出るのを防ぐ安全化処理
-        if (data && typeof data === 'object') {
-          if (!data.results) data.results = []
-          if (data.songs && !data.songs.data) data.songs.data = []
-          if (data.albums && !data.albums.data) data.albums.data = []
-          if (data.artists && !data.artists.data) data.artists.data = []
-          if (data.playlists && !data.playlists.data) data.playlists.data = []
-        } else {
-          data = { results: [] }
-        }
-
-        return c.json(data)
+        // 崩れた型や欠落プロパティを整形してレスポンスを返す
+        const cleanData = sanitizeJioSaavnData(data)
+        return c.json(cleanData)
       }
       await next()
     })
