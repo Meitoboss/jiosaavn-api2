@@ -7,67 +7,57 @@ import { Home } from './pages/home'
 import type { Routes } from '#common/types'
 import type { HTTPException } from 'hono/http-exception'
 
-// JioSaavn の不揃いなデータ構造を安全な値に補正する関数
-function sanitizeItem(item: any): any {
-  if (!item || typeof item !== 'object') return {}
+// すべてのネストされたデータを走査し、undefined や null を安全な型に変換する関数
+function deepSanitize(obj: any): any {
+  if (obj === null || obj === undefined) return {}
+  if (typeof obj !== 'object') return obj
 
-  // JioSaavn が image: false などで返してくる場合にアプリが .replace() で落ちるのを防ぐ
-  if (typeof item.image !== 'string') item.image = ''
-  if (typeof item.title !== 'string') item.title = item.song || item.name || ''
-  if (typeof item.song !== 'string') item.song = item.title || ''
-  if (typeof item.subtitle !== 'string') item.subtitle = ''
-  if (typeof item.type !== 'string') item.type = 'song'
-  if (typeof item.perma_url !== 'string') item.perma_url = ''
-
-  if (!item.more_info || typeof item.more_info !== 'object') {
-    item.more_info = {}
+  if (Array.isArray(obj)) {
+    return obj.map((item) => deepSanitize(item))
   }
 
-  const m = item.more_info
-  if (typeof m.singers !== 'string') m.singers = ''
-  if (typeof m.music !== 'string') m.music = ''
-  if (typeof m.album !== 'string') m.album = ''
-  if (typeof m.primary_artists !== 'string') m.primary_artists = ''
-  if (typeof m.encrypted_media_url !== 'string') m.encrypted_media_url = ''
+  const sanitized: any = { ...obj }
 
-  if (!m.artistMap || typeof m.artistMap !== 'object') {
-    m.artistMap = { primary_artists: [], featured_artists: [], artists: [] }
-  } else {
-    if (!Array.isArray(m.artistMap.primary_artists)) m.artistMap.primary_artists = []
-    if (!Array.isArray(m.artistMap.featured_artists)) m.artistMap.featured_artists = []
-    if (!Array.isArray(m.artistMap.artists)) m.artistMap.artists = []
-  }
-
-  return item
-}
-
-function sanitizeJioSaavnData(data: any): any {
-  if (!data || typeof data !== 'object') {
-    data = {}
-  }
-
-  if (Array.isArray(data)) {
-    return data.map(sanitizeItem)
-  }
-
-  if (!Array.isArray(data.results)) {
-    data.results = []
-  } else {
-    data.results = data.results.map(sanitizeItem)
-  }
-
-  const categories = ['songs', 'albums', 'artists', 'playlists', 'topquery', 'shows']
-  for (const cat of categories) {
-    if (!data[cat] || typeof data[cat] !== 'object') {
-      data[cat] = { data: [] }
-    } else if (!Array.isArray(data[cat].data)) {
-      data[cat].data = []
-    } else {
-      data[cat].data = data[cat].data.map(sanitizeItem)
+  // アプリが .map() を呼ぶ可能性のある主要な配列キーを確実に配列化
+  const arrayKeys = [
+    'results', 'songs', 'albums', 'artists', 'playlists',
+    'topSongs', 'singles', 'topquery', 'data', 'list', 'featured_artists'
+  ]
+  
+  for (const key of arrayKeys) {
+    if (key in sanitized) {
+      if (!Array.isArray(sanitized[key])) {
+        if (sanitized[key] && typeof sanitized[key] === 'object' && Array.isArray(sanitized[key].data)) {
+          sanitized[key].data = deepSanitize(sanitized[key].data)
+        } else {
+          sanitized[key] = []
+        }
+      }
     }
   }
 
-  return data
+  // アーティスト画面・曲画面で必須の配列プロパティを保証
+  if (!Array.isArray(sanitized.topSongs)) sanitized.topSongs = []
+  if (!Array.isArray(sanitized.albums)) sanitized.albums = []
+  if (!Array.isArray(sanitized.singles)) sanitized.singles = []
+  if (!Array.isArray(sanitized.results)) sanitized.results = []
+
+  // 文字列プロパティが boolean(false) などで返ってきた場合の補正
+  const stringKeys = ['image', 'title', 'song', 'name', 'subtitle', 'type', 'perma_url', 'singers', 'music']
+  for (const key of stringKeys) {
+    if (key in sanitized && typeof sanitized[key] !== 'string') {
+      sanitized[key] = ''
+    }
+  }
+
+  // ネストされたオブジェクトも再帰的に補正
+  for (const key in sanitized) {
+    if (sanitized[key] && typeof sanitized[key] === 'object') {
+      sanitized[key] = deepSanitize(sanitized[key])
+    }
+  }
+
+  return sanitized
 }
 
 export class App {
@@ -102,23 +92,27 @@ export class App {
       const url = new URL(c.req.url)
       if (url.searchParams.has('__call')) {
         const targetUrl = `https://www.jiosaavn.com/api.php${url.search}`
-        const response = await fetch(targetUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Cookie': 'L=english;'
-          }
-        })
 
-        let data: any
         try {
-          data = await response.json()
-        } catch {
-          data = {}
-        }
+          const response = await fetch(targetUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Cookie': 'L=english;'
+            }
+          })
 
-        // 崩れた型や欠落プロパティを整形してレスポンスを返す
-        const cleanData = sanitizeJioSaavnData(data)
-        return c.json(cleanData)
+          let data: any
+          try {
+            data = await response.json()
+          } catch {
+            data = {}
+          }
+
+          const cleanData = deepSanitize(data)
+          return c.json(cleanData)
+        } catch {
+          return c.json({ results: [], songs: [], topSongs: [], albums: [] })
+        }
       }
       await next()
     })
