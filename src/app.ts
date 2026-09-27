@@ -45,7 +45,25 @@ export class App {
             'Cookie': 'L=english;'
           }
         })
-        const data = await response.json()
+
+        let data: any
+        try {
+          data = await response.json()
+        } catch {
+          data = {}
+        }
+
+        // JioSaavn に楽曲が無い場合、アプリ側で undefined エラーが出るのを防ぐ安全化処理
+        if (data && typeof data === 'object') {
+          if (!data.results) data.results = []
+          if (data.songs && !data.songs.data) data.songs.data = []
+          if (data.albums && !data.albums.data) data.albums.data = []
+          if (data.artists && !data.artists.data) data.artists.data = []
+          if (data.playlists && !data.playlists.data) data.playlists.data = []
+        } else {
+          data = { results: [] }
+        }
+
         return c.json(data)
       }
       await next()
