@@ -33,6 +33,23 @@ export class App {
     this.app.use(logger())
     this.app.use(prettyJSON())
     this.app.use(cors())
+
+    // アプリからの ?__call= パラメータのリクエストを JioSaavn 公式へ自動中継する処理
+    this.app.use('*', async (c, next) => {
+      const url = new URL(c.req.url)
+      if (url.searchParams.has('__call')) {
+        const targetUrl = `https://www.jiosaavn.com/api.php${url.search}`
+        const response = await fetch(targetUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Cookie': 'L=english;'
+          }
+        })
+        const data = await response.json()
+        return c.json(data)
+      }
+      await next()
+    })
   }
 
   private initializeSwaggerUI() {
@@ -47,8 +64,8 @@ export class App {
           version: '1.0.0',
           title: 'JioSaavn API',
           description: `# Introduction 
-        \nJioSaavn API, accessible at [saavn.dev](https://saavn.dev), is an unofficial API that allows users to download high-quality songs from [JioSaavn](https://jiosaavn.com). 
-        It offers a fast, reliable, and easy-to-use API for developers. \n`
+\nJioSaavn API, accessible at [saavn.dev](https://saavn.dev), is an unofficial API that allows users to download high-quality songs from [JioSaavn](https://jiosaavn.com). 
+It offers a fast, reliable, and easy-to-use API for developers. \n`
         },
         servers: [{ url: `${protocol}//${hostname}${port ? `:${port}` : ''}`, description: 'Current environment' }]
       }
